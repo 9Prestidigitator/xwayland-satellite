@@ -1,6 +1,6 @@
 use super::{InnerServerState, NoConnection, ServerState, WindowDims, selection::Clipboard};
 use crate::server::selection::{Primary, SelectionType};
-use crate::xstate::{SetState, WinSize, WmName};
+use crate::xstate::{SetState, WinSize, WmName, WmNormalHints};
 use crate::{XConnection, timespec_from_millis};
 use rustix::event::{PollFd, PollFlags, poll};
 use std::collections::HashMap;
@@ -162,6 +162,7 @@ struct FakeXConnection {
     focused_window: Option<Window>,
     windows: HashMap<Window, WindowData>,
     set_window_dims_counter: usize,
+    configure_notifies: Vec<(Window, super::PendingSurfaceState)>,
 }
 
 impl FakeXConnection {
@@ -223,6 +224,10 @@ impl super::XConnection for FakeXConnection {
         };
         self.set_window_dims_counter += 1;
         true
+    }
+
+    fn send_configure_notify(&mut self, window: Window, state: super::PendingSurfaceState) {
+        self.configure_notifies.push((window, state));
     }
 
     #[track_caller]
@@ -1061,6 +1066,131 @@ fn zones_position_request() {
             height: 100,
         }
     );
+}
+
+#[test]
+fn zones_rejected_position_sends_configure_notify() {
+    let mut f = TestFixture::new_pre_connect(|server| {
+        server.enable_zones();
+        server.reject_zone_positions();
+    });
+    let compositor = f.compositor();
+    let window = Window::new(1);
+    f.create_toplevel(&compositor, window);
+
+    assert!(
+        !f.satellite
+            .request_window_position(window, Some(120), Some(230))
+    );
+    f.run();
+    f.run();
+
+    assert_eq!(f.connection().configure_notifies.len(), 1);
+    let (notified_window, dims) = f.connection().configure_notifies[0];
+    assert_eq!(notified_window, window);
+    assert_eq!((dims.x, dims.y), (0, 0));
+}
+
+#[test]
+fn zones_new_window_without_position_intent_is_not_positioned() {
+    let mut f = TestFixture::new_pre_connect(testwl::Server::enable_zones);
+    let compositor = f.compositor();
+    let window = Window::new(1);
+    let (_, surface_id) = f.create_toplevel(&compositor, window);
+
+    assert!(!f.testwl.zone_associated(surface_id));
+    assert_eq!(f.testwl.zone_position(surface_id), None);
+}
+
+#[test]
+fn zones_initial_position_from_wm_normal_hints() {
+    let mut f = TestFixture::new_pre_connect(testwl::Server::enable_zones);
+    let compositor = f.compositor();
+    let window = Window::new(1);
+    let (buffer, surface) = compositor.create_surface();
+    let dims = WindowDims {
+        x: 120,
+        y: 230,
+        width: 50,
+        height: 50,
+    };
+    f.new_window(
+        window,
+        false,
+        WindowData {
+            mapped: false,
+            fullscreen: false,
+            dims,
+        },
+    );
+    f.satellite.set_size_hints(
+        window,
+        WmNormalHints {
+            has_position: true,
+            ..Default::default()
+        },
+    );
+    f.map_window(&compositor, window, &surface.obj, &buffer);
+    f.run();
+    let surface_id = f.check_new_surface();
+    f.run();
+
+    assert_eq!(
+        f.testwl.zone_position(surface_id),
+        Some(testwl::Vec2 { x: 120, y: 230 })
+    );
+}
+
+#[test]
+fn zones_explicit_positions_survive_reused_x_window_sequence() {
+    let mut f = TestFixture::new_pre_connect(testwl::Server::enable_zones);
+    let compositor = f.compositor();
+    let window = Window::new(1);
+    let dims = WindowDims {
+        width: 50,
+        height: 50,
+        ..Default::default()
+    };
+    f.new_window(
+        window,
+        false,
+        WindowData {
+            mapped: false,
+            fullscreen: false,
+            dims,
+        },
+    );
+
+    for expected in [
+        testwl::Vec2 { x: 120, y: 230 },
+        testwl::Vec2 { x: 410, y: 75 },
+        testwl::Vec2 { x: 120, y: 230 },
+    ] {
+        assert!(
+            f.satellite
+                .request_window_position(window, Some(expected.x), Some(expected.y))
+        );
+        f.reconfigure_window(
+            window,
+            WindowDims {
+                x: expected.x as i16,
+                y: expected.y as i16,
+                ..dims
+            },
+            false,
+        );
+
+        let (buffer, surface) = compositor.create_surface();
+        f.map_window(&compositor, window, &surface.obj, &buffer);
+        f.run();
+        let surface_id = f.check_new_surface();
+        f.run();
+        assert_eq!(f.testwl.zone_position(surface_id), Some(expected));
+
+        f.satellite.unmap_window(window);
+        surface.obj.destroy();
+        f.run();
+    }
 }
 
 #[test]
@@ -2647,6 +2777,7 @@ fn toplevel_size_limits_scaled() {
     f.satellite.set_size_hints(
         window,
         super::WmNormalHints {
+            has_position: false,
             min_size: Some(WinSize {
                 width: 20,
                 height: 20,
@@ -2676,6 +2807,7 @@ fn toplevel_size_limits_scaled() {
     f.satellite.set_size_hints(
         window,
         super::WmNormalHints {
+            has_position: false,
             min_size: Some(WinSize {
                 width: 40,
                 height: 40,
@@ -2707,6 +2839,7 @@ fn toplevel_size_limits_scaled() {
     f.satellite.set_size_hints(
         window,
         super::WmNormalHints {
+            has_position: false,
             min_size: Some(WinSize {
                 width: 40,
                 height: 40,
@@ -2723,6 +2856,7 @@ fn toplevel_size_limits_scaled() {
     f.satellite.set_size_hints(
         window,
         super::WmNormalHints {
+            has_position: false,
             min_size: None,
             max_size: None,
         },
@@ -3292,6 +3426,7 @@ fn decorations_max_height_int_max() {
     f.satellite.set_size_hints(
         window,
         super::WmNormalHints {
+            has_position: false,
             min_size: None,
             max_size: Some(WinSize {
                 width: i32::MAX,

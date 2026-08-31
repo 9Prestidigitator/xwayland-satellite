@@ -322,7 +322,25 @@ push_events!(ZwpConfinedPointerV1);
 push_events!(ZwpLockedPointerV1);
 push_events!(WpFractionalScaleV1);
 push_events!(ZxdgToplevelDecorationV1);
-push_events!(XxZoneItemV1);
+
+impl Dispatch<XxZoneItemV1, Entity> for MyWorld {
+    fn event(
+        state: &mut Self,
+        item: &XxZoneItemV1,
+        event: <XxZoneItemV1 as Proxy>::Event,
+        key: &Entity,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        state.events.push((
+            *key,
+            ObjectEvent::ZoneItem(super::ZoneItemEvent {
+                item: item.clone(),
+                event,
+            }),
+        ));
+    }
+}
 
 pub(crate) struct LateInitObjectKey<P: Proxy> {
     key: OnceLock<Entity>,

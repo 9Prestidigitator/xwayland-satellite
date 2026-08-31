@@ -295,6 +295,8 @@ struct State {
     xdg_activation: Option<XdgActivationV1>,
     valid_tokens: HashSet<String>,
     token_counter: u32,
+    reject_zone_positions: bool,
+    zone_items: HashSet<XdgToplevel>,
     zone_positions: HashMap<XdgToplevel, Vec2>,
 }
 
@@ -328,6 +330,8 @@ impl Default for State {
             xdg_activation: None,
             valid_tokens: HashSet::new(),
             token_counter: 0,
+            reject_zone_positions: false,
+            zone_items: HashSet::new(),
             zone_positions: HashMap::new(),
         }
     }
@@ -557,9 +561,18 @@ impl Server {
         self.dh.create_global::<State, XxZoneManagerV1, _>(1, ());
     }
 
+    pub fn reject_zone_positions(&mut self) {
+        self.state.reject_zone_positions = true;
+    }
+
     pub fn zone_position(&self, surface_id: SurfaceId) -> Option<Vec2> {
         let toplevel = &self.state.surfaces.get(&surface_id)?.toplevel().toplevel;
         self.state.zone_positions.get(toplevel).copied()
+    }
+
+    pub fn zone_associated(&self, surface_id: SurfaceId) -> bool {
+        let toplevel = &self.state.surfaces[&surface_id].toplevel().toplevel;
+        self.state.zone_items.contains(toplevel)
     }
 
     pub fn poll_fd(&mut self) -> BorrowedFd<'_> {
@@ -1092,6 +1105,7 @@ impl Dispatch<XxZoneV1, ()> for State {
                 zone.item_entered(&item);
                 item.frame_extents(0, 0, 0, 0);
                 let data = item.data::<ZoneItemState>().unwrap();
+                state.zone_items.insert(data.toplevel.clone());
                 let position = state
                     .zone_positions
                     .get(&data.toplevel)
@@ -1099,7 +1113,12 @@ impl Dispatch<XxZoneV1, ()> for State {
                     .unwrap_or_default();
                 item.position(position.x, position.y);
             }
-            xx_zone_v1::Request::RemoveItem { item } => zone.item_left(&item),
+            xx_zone_v1::Request::RemoveItem { item } => {
+                if let Some(data) = item.data::<ZoneItemState>() {
+                    state.zone_items.remove(&data.toplevel);
+                }
+                zone.item_left(&item);
+            }
             _ => unreachable!(),
         }
     }
@@ -1116,8 +1135,15 @@ impl Dispatch<XxZoneItemV1, ZoneItemState> for State {
         _: &mut wayland_server::DataInit<'_, Self>,
     ) {
         match request {
-            xx_zone_item_v1::Request::Destroy => {}
+            xx_zone_item_v1::Request::Destroy => {
+                state.zone_items.remove(&data.toplevel);
+                state.zone_positions.remove(&data.toplevel);
+            }
             xx_zone_item_v1::Request::SetPosition { x, y } => {
+                if state.reject_zone_positions {
+                    item.position_failed();
+                    return;
+                }
                 state
                     .zone_positions
                     .insert(data.toplevel.clone(), Vec2 { x, y });

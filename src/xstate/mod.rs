@@ -768,7 +768,7 @@ impl XState {
 
     fn get_wm_size_hints(&self, window: x::Window) -> XResult<Option<WmNormalHints>> {
         let cookie =
-            self.get_property_cookie(window, x::ATOM_WM_NORMAL_HINTS, x::ATOM_WM_SIZE_HINTS, 9);
+            self.get_property_cookie(window, x::ATOM_WM_NORMAL_HINTS, x::ATOM_WM_SIZE_HINTS, 18);
         let resolver = |reply: x::GetPropertyReply| {
             let data: &[u32] = reply.value();
             WmNormalHints::from(data)
@@ -988,6 +988,7 @@ pub struct WinSize {
 
 #[derive(Copy, Clone, Default, Debug, PartialEq, Eq)]
 pub struct WmNormalHints {
+    pub has_position: bool,
     pub min_size: Option<WinSize>,
     pub max_size: Option<WinSize>,
 }
@@ -995,16 +996,23 @@ pub struct WmNormalHints {
 impl From<&[u32]> for WmNormalHints {
     fn from(value: &[u32]) -> Self {
         let mut ret = Self::default();
-        let flags = WmSizeHintsFlags::from_bits_truncate(value[0]);
+        let Some(flags) = value.first().copied() else {
+            return ret;
+        };
+        let flags = WmSizeHintsFlags::from_bits_truncate(flags);
 
-        if flags.contains(WmSizeHintsFlags::ProgramMinSize) {
+        if flags.intersects(WmSizeHintsFlags::UserPosition | WmSizeHintsFlags::ProgramPosition) {
+            ret.has_position = true;
+        }
+
+        if flags.contains(WmSizeHintsFlags::ProgramMinSize) && value.len() >= 7 {
             ret.min_size = Some(WinSize {
                 width: value[5] as _,
                 height: value[6] as _,
             });
         }
 
-        if flags.contains(WmSizeHintsFlags::ProgramMaxSize) {
+        if flags.contains(WmSizeHintsFlags::ProgramMaxSize) && value.len() >= 9 {
             ret.max_size = Some(WinSize {
                 width: value[7] as _,
                 height: value[8] as _,
@@ -1355,6 +1363,32 @@ impl XConnection for RealConnection {
             return false
         );
         true
+    }
+
+    fn send_configure_notify(
+        &mut self,
+        window: x::Window,
+        dims: crate::server::PendingSurfaceState,
+    ) {
+        let event = x::ConfigureNotifyEvent::new(
+            window,
+            window,
+            x::WINDOW_NONE,
+            dims.x as i16,
+            dims.y as i16,
+            dims.width as u16,
+            dims.height as u16,
+            0,
+            false,
+        );
+        if let Err(e) = self.connection.send_and_check_request(&x::SendEvent {
+            propagate: false,
+            destination: x::SendEventDest::Window(window),
+            event_mask: x::EventMask::STRUCTURE_NOTIFY,
+            event: &event,
+        }) {
+            warn!("Failed to send ConfigureNotify to {window:?} ({e})");
+        }
     }
 
     fn set_fullscreen(&mut self, window: x::Window, fullscreen: bool) {

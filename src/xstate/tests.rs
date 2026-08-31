@@ -101,6 +101,23 @@ impl WmNormalHints {
     }
 }
 
+#[test]
+fn wm_normal_hints_retains_position_intent() {
+    let hints: super::WmNormalHints = WmNormalHints::new().program_pos(221, 589).into();
+    assert!(hints.has_position);
+
+    let hints: super::WmNormalHints = WmNormalHints::new().user_pos(u32::MAX, 42).into();
+    assert!(hints.has_position);
+}
+
+#[test]
+fn empty_wm_normal_hints_is_safe() {
+    assert_eq!(
+        super::WmNormalHints::from([].as_slice()),
+        super::WmNormalHints::default()
+    );
+}
+
 mod window_role_heuristics {
     use super::WmNormalHints;
     use crate::xstate::{WindowRole, WindowRoleHeuristics, WindowTypes, motif};

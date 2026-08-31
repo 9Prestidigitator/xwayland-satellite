@@ -18,6 +18,7 @@ pub trait XConnection: Sized + 'static {
     type X11Selection: X11Selection;
 
     fn set_window_dims(&mut self, window: x::Window, dims: PendingSurfaceState) -> bool;
+    fn send_configure_notify(&mut self, window: x::Window, dims: PendingSurfaceState);
     fn set_fullscreen(&mut self, window: x::Window, fullscreen: bool);
     fn focus_window(&mut self, window: x::Window, output_name: Option<String>);
     fn close_window(&mut self, window: x::Window);
