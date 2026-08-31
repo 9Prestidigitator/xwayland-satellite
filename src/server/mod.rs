@@ -200,6 +200,16 @@ impl WindowData {
                 .size_hints
                 .is_some_and(|hints| hints.has_position)
     }
+
+    fn record_position_request(&mut self, x: Option<i32>, y: Option<i32>) {
+        self.position_requested = true;
+        if let Some(x) = x {
+            self.attrs.dims.x = x as i16;
+        }
+        if let Some(y) = y {
+            self.attrs.dims.y = y as i16;
+        }
+    }
 }
 
 struct SurfaceAttach {
@@ -1326,27 +1336,45 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
             return true;
         };
 
-        if !win.mapped {
-            if !win.attrs.role.is_popup() && (x.is_some() || y.is_some()) {
-                win.position_requested = true;
-            }
+        if win.attrs.role.is_popup() {
             return true;
         }
-        if win.attrs.role.is_popup() {
+
+        if !win.mapped {
+            win.record_position_request(x, y);
             return true;
         }
         drop(win);
 
-        let Some(zone) = self
-            .zones
-            .as_ref()
-            .filter(|zones| zones.ready && zones.valid)
-            .map(|zones| zones.zone.clone())
-        else {
+        // X MapNotify and the xwayland-shell surface association are independent event streams.
+        // A client can issue a ConfigureRequest after the X window is mapped but before its
+        // xdg_toplevel and zone item exist. Preserve that request in X until the Wayland role is
+        // ready instead of claiming it was handled by zones and silently dropping it.
+        let has_toplevel = self
+            .world
+            .get::<&SurfaceRole>(entity)
+            .ok()
+            .is_some_and(|role| matches!(&*role, SurfaceRole::Toplevel(Some(_))));
+        if !has_toplevel {
+            let mut win = self.world.get::<&mut WindowData>(entity).unwrap();
+            win.record_position_request(x, y);
+            return true;
+        }
+
+        let Some(zones) = self.zones.as_ref() else {
             // Preserve the old behavior on compositors without zones: mapped toplevels cannot
             // be positioned with xdg-shell alone.
             return false;
         };
+        if !zones.ready {
+            let mut win = self.world.get::<&mut WindowData>(entity).unwrap();
+            win.record_position_request(x, y);
+            return true;
+        }
+        if !zones.valid {
+            return false;
+        }
+        let zone = zones.zone.clone();
 
         let mut query = self
             .world
@@ -1364,7 +1392,10 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
             return false;
         };
         let Some(zone_item) = toplevel.zone_item.as_mut() else {
-            return false;
+            drop(query);
+            let mut win = self.world.get::<&mut WindowData>(entity).unwrap();
+            win.record_position_request(x, y);
+            return true;
         };
 
         if !zone_item.associated && !zone_item.association_pending {

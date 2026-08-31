@@ -1194,6 +1194,69 @@ fn zones_explicit_positions_survive_reused_x_window_sequence() {
 }
 
 #[test]
+fn zones_positions_survive_x_map_before_surface_association() {
+    let mut f = TestFixture::new_pre_connect(testwl::Server::enable_zones);
+    let compositor = f.compositor();
+    let window = Window::new(1);
+    let dims = WindowDims {
+        width: 50,
+        height: 50,
+        ..Default::default()
+    };
+    f.new_window(
+        window,
+        false,
+        WindowData {
+            mapped: false,
+            fullscreen: false,
+            dims,
+        },
+    );
+
+    for expected in [
+        testwl::Vec2 { x: 120, y: 230 },
+        testwl::Vec2 { x: 410, y: 75 },
+        testwl::Vec2 { x: 120, y: 230 },
+    ] {
+        // X MapNotify can precede xwayland-shell's surface association. REAPER issues its saved
+        // ConfigureRequest in this interval on repeated dialog opens.
+        f.satellite.map_window(window);
+        assert!(
+            f.satellite
+                .request_window_position(window, Some(expected.x), Some(expected.y))
+        );
+
+        let entity = f.satellite.windows[&window];
+        let actual = f
+            .satellite
+            .world
+            .get::<&super::WindowData>(entity)
+            .unwrap()
+            .attrs
+            .dims;
+        assert_eq!((actual.x, actual.y), (expected.x as i16, expected.y as i16));
+
+        let (buffer, surface) = compositor.create_surface();
+        f.associate_window(&compositor, window, &surface.obj);
+        f.run();
+        surface
+            .send_request(Req::<WlSurface>::Attach {
+                buffer: Some(buffer.obj.clone()),
+                x: 0,
+                y: 0,
+            })
+            .unwrap();
+        f.run();
+        let surface_id = f.check_new_surface();
+        assert_eq!(f.testwl.zone_position(surface_id), Some(expected));
+
+        f.satellite.unmap_window(window);
+        surface.obj.destroy();
+        f.run();
+    }
+}
+
+#[test]
 fn popup_flow_simple() {
     let (mut f, compositor) = TestFixture::new_with_compositor();
 
