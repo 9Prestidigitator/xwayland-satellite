@@ -479,6 +479,12 @@ impl XState {
                     let mut list = Vec::new();
                     let mask = e.value_mask();
 
+                    server_state.resize_window_from_configure(
+                        e.window(),
+                        mask.contains(x::ConfigWindowMask::WIDTH),
+                        mask.contains(x::ConfigWindowMask::HEIGHT),
+                    );
+
                     let wants_position =
                         mask.intersects(x::ConfigWindowMask::X | x::ConfigWindowMask::Y);
                     let configure_x_position = !wants_position

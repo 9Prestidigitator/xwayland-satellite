@@ -1685,6 +1685,33 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
             .resize(&last_click_data.0, last_click_data.1, edge);
     }
 
+    /// Starts a Wayland interactive resize for X11 clients which implement their own resize
+    /// handles with `XResizeWindow` instead of `_NET_WM_MOVERESIZE`.
+    ///
+    /// A ConfigureRequest has no input serial or resize edge. Only translate requests made while
+    /// the left button is still held over this window, which supplies a valid Wayland serial and
+    /// distinguishes an interactive drag from a programmatic size request. `XResizeWindow` keeps
+    /// the top-left corner fixed, so width and height changes correspond to the right and bottom
+    /// edges respectively.
+    pub fn resize_window_from_configure(&mut self, window: x::Window, width: bool, height: bool) {
+        let direction = match (width, height) {
+            (true, true) => MoveResizeDirection::SizeBottomRight,
+            (true, false) => MoveResizeDirection::SizeRight,
+            (false, true) => MoveResizeDirection::SizeBottom,
+            (false, false) => return,
+        };
+
+        let is_interactive = self
+            .windows
+            .get(&window)
+            .copied()
+            .and_then(|entity| self.world.entity(entity).ok())
+            .is_some_and(|data| data.has::<LeftButtonPressed>());
+        if is_interactive {
+            self.resize_window(window, direction);
+        }
+    }
+
     pub fn destroy_window(&mut self, window: x::Window) {
         if let Some(id) = self.windows.remove(&window) {
             self.world.remove::<(x::Window, WindowData)>(id).unwrap();
