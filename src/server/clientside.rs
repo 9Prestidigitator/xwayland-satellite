@@ -91,6 +91,9 @@ use wayland_protocols::{
 use wayland_server::protocol as server;
 use wl_drm::client::wl_drm::WlDrm;
 use xcb::x;
+use zones::client::{
+    xx_zone_item_v1::XxZoneItemV1, xx_zone_manager_v1::XxZoneManagerV1, xx_zone_v1::XxZoneV1,
+};
 
 pub(super) struct SelectionEvents<T> {
     pub offer: Option<T>,
@@ -121,6 +124,7 @@ pub(super) struct MyWorld {
     pub clipboard: SelectionEvents<SelectionOffer>,
     pub primary: SelectionEvents<PrimarySelectionOffer>,
     pub pending_activations: Vec<(xcb::x::Window, String)>,
+    pub zone_events: Vec<zones::client::xx_zone_v1::Event>,
 }
 
 impl MyWorld {
@@ -135,6 +139,7 @@ impl MyWorld {
             clipboard: Default::default(),
             primary: Default::default(),
             pending_activations: Vec::new(),
+            zone_events: Vec::new(),
         }
     }
 }
@@ -196,6 +201,20 @@ delegate_noop!(MyWorld: WlSubsurface);
 delegate_noop!(MyWorld: WpLinuxDrmSyncobjManagerV1);
 delegate_noop!(MyWorld: WpLinuxDrmSyncobjSurfaceV1);
 delegate_noop!(MyWorld: WpLinuxDrmSyncobjTimelineV1);
+delegate_noop!(MyWorld: XxZoneManagerV1);
+
+impl Dispatch<XxZoneV1, ()> for MyWorld {
+    fn event(
+        state: &mut Self,
+        _: &XxZoneV1,
+        event: <XxZoneV1 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        state.zone_events.push(event);
+    }
+}
 
 impl Dispatch<WlRegistry, GlobalListContents> for MyWorld {
     fn event(
@@ -303,6 +322,7 @@ push_events!(ZwpConfinedPointerV1);
 push_events!(ZwpLockedPointerV1);
 push_events!(WpFractionalScaleV1);
 push_events!(ZxdgToplevelDecorationV1);
+push_events!(XxZoneItemV1);
 
 pub(crate) struct LateInitObjectKey<P: Proxy> {
     key: OnceLock<Entity>,

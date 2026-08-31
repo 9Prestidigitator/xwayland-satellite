@@ -1,5 +1,5 @@
 [workspace]
-members = ["macros", "testwl", "wl_drm"]
+members = ["macros", "testwl", "wl_drm", "zones"]
 
 [workspace.dependencies]
 wayland-client = "0.31.11"
@@ -38,6 +38,7 @@ wayland-protocols = { workspace = true, features = ["client", "server", "staging
 wayland-server.workspace = true
 xcb = { version = "1.7.0", features = ["composite", "randr", "res"] }
 wl_drm = { path = "wl_drm" }
+zones = { path = "zones" }
 log = "0.4.21"
 pretty_env_logger = "0.5.0"
 xcb-util-cursor = "0.4"

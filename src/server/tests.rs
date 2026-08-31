@@ -1035,6 +1035,35 @@ fn toplevel_flow() {
 }
 
 #[test]
+fn zones_position_request() {
+    let mut f = TestFixture::new_pre_connect(testwl::Server::enable_zones);
+    let compositor = f.compositor();
+    let window = Window::new(1);
+    let (_, surface_id) = f.create_toplevel(&compositor, window);
+
+    assert!(
+        !f.satellite
+            .request_window_position(window, Some(120), Some(230),)
+    );
+    f.run();
+    f.run();
+
+    assert_eq!(
+        f.testwl.zone_position(surface_id),
+        Some(testwl::Vec2 { x: 120, y: 230 })
+    );
+    assert_eq!(
+        f.connection().windows[&window].dims,
+        WindowDims {
+            x: 120,
+            y: 230,
+            width: 100,
+            height: 100,
+        }
+    );
+}
+
+#[test]
 fn popup_flow_simple() {
     let (mut f, compositor) = TestFixture::new_with_compositor();
 

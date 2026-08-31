@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="xx_zones_v1">
+  <copyright>
+    Copyright © 2023-2026 Matthias Klumpp
+    Copyright © 2024-2025 Frank Praznik
+    Copyright ©      2024 Victoria Brekenfeld
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <description summary="client-specific zones for explicit window placement">
+    Protocol to manage client-specific zones for explicit window placement.
+  </description>
+
+  <interface name="xx_zone_manager_v1" version="1">
+    <description summary="manage zones for clients"/>
+    <request name="destroy" type="destructor"/>
+    <request name="get_zone_item">
+      <arg name="id" type="new_id" interface="xx_zone_item_v1"/>
+      <arg name="toplevel" type="object" interface="xdg_toplevel"/>
+    </request>
+    <request name="get_zone">
+      <arg name="id" type="new_id" interface="xx_zone_v1"/>
+      <arg name="output" type="object" interface="wl_output" allow-null="true"/>
+    </request>
+    <request name="get_zone_from_handle">
+      <arg name="id" type="new_id" interface="xx_zone_v1"/>
+      <arg name="handle" type="string"/>
+    </request>
+  </interface>
+
+  <interface name="xx_zone_item_v1" version="1">
+    <description summary="a positionable toplevel"/>
+    <request name="destroy" type="destructor"/>
+    <event name="frame_extents">
+      <arg name="top" type="int"/>
+      <arg name="bottom" type="int"/>
+      <arg name="left" type="int"/>
+      <arg name="right" type="int"/>
+    </event>
+    <request name="set_position">
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+    </request>
+    <event name="position">
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+    </event>
+    <event name="position_failed"/>
+    <event name="closed"/>
+  </interface>
+
+  <interface name="xx_zone_v1" version="1">
+    <description summary="an area in which clients can position windows"/>
+    <request name="destroy" type="destructor"/>
+    <event name="size">
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </event>
+    <event name="handle">
+      <arg name="handle" type="string"/>
+    </event>
+    <event name="done"/>
+    <enum name="error">
+      <entry name="invalid" value="0"/>
+    </enum>
+    <request name="add_item">
+      <arg name="item" type="object" interface="xx_zone_item_v1"/>
+    </request>
+    <request name="remove_item">
+      <arg name="item" type="object" interface="xx_zone_item_v1"/>
+    </request>
+    <event name="item_blocked">
+      <arg name="item" type="object" interface="xx_zone_item_v1"/>
+    </event>
+    <event name="item_entered">
+      <arg name="item" type="object" interface="xx_zone_item_v1"/>
+    </event>
+    <event name="item_left">
+      <arg name="item" type="object" interface="xx_zone_item_v1"/>
+    </event>
+  </interface>
+</protocol>

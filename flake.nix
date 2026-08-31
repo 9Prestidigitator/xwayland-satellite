@@ -46,6 +46,7 @@
               ./macros
               ./testwl
               ./wl_drm
+              ./zones
               ./resources
               ./src
               ./Cargo.toml

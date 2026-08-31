@@ -44,13 +44,15 @@ The way that satellite manages windows from the X11 point of view is as follows:
 - All monitors maintain their relative positions to one another. Their absolute position is such that
   the top-most monitor's top edge is on the X-axis and the left-most monitor's left edge is on the Y-axis.
     - All monitors are on non-negative coordinates with no gaps between the screen and any monitor, matching what `xrandr` does.
-- All toplevels on a monitor are positioned at 0x0 on that monitor. So if you have one monitor at 0x0,
+- On compositors without the optional zones protocol, all toplevels on a monitor are positioned at 0x0 on that monitor. So if you have one monitor at 0x0,
 all the windows are located at 0x0. If you have a monitor at 300x600, all the windows on that monitor are at 300x600.
     - This offset is needed because all monitors rest in the same coordinate plane in X11, so missing this offset would
     would lead to incorrect cursor behavior.
 - The current window that the mouse is hovering over is raised to the top of the stack.
 - Any window determined to be a popup (override redirect, EWMH properties, etc) has its position respected if there is
 an existing toplevel. If there is no existing toplevel, the window is treated as a toplevel.
+- When the host compositor advertises `xx-zones-v1`, toplevel X11 position requests are forwarded to a shared zone and
+  the compositor's resulting position is synchronized back to Xwayland.
 
 This approach seems to work well for most applications. The biggest issues will be applications that rely on creating windows
 at specific coordinates - for example Steam's notifications that slide in from the bottom of the screen.

@@ -75,6 +75,11 @@ use wayland_server::{
 };
 use wl_drm::{client::wl_drm::WlDrm as WlDrmClient, server::wl_drm::WlDrm as WlDrmServer};
 use xcb::x;
+use zones::client::{
+    xx_zone_item_v1::{self, XxZoneItemV1},
+    xx_zone_manager_v1::XxZoneManagerV1,
+    xx_zone_v1::{self, XxZoneV1},
+};
 
 impl From<&x::CreateNotifyEvent> for WindowDims {
     fn from(value: &x::CreateNotifyEvent) -> Self {
@@ -176,6 +181,13 @@ impl WindowData {
             debug!(target: "output_offset", "set {:?} offset to {:?}", window, self.output_offset);
         }
     }
+
+    fn zone_position(&self, scale: f64, x: i32, y: i32) -> (i32, i32) {
+        (
+            ((x - self.output_offset.x) as f64 / scale) as i32,
+            ((y - self.output_offset.y) as f64 / scale) as i32,
+        )
+    }
 }
 
 struct SurfaceAttach {
@@ -211,6 +223,9 @@ impl SurfaceRole {
     fn destroy(&mut self) {
         match self {
             SurfaceRole::Toplevel(Some(t)) => {
+                if let Some(zone_item) = t.zone_item.take() {
+                    zone_item.item.destroy();
+                }
                 if let Some(decoration) = t.decoration.wl.take() {
                     decoration.destroy();
                 }
@@ -240,6 +255,13 @@ struct ToplevelData {
     xdg: XdgSurfaceData,
     fullscreen: bool,
     decoration: decoration::DecorationsData,
+    zone_item: Option<ZoneItemData>,
+}
+
+#[derive(Debug)]
+struct ZoneItemData {
+    item: XxZoneItemV1,
+    associated: bool,
 }
 
 #[derive(Debug)]
@@ -251,6 +273,54 @@ struct PopupData {
 
 trait Event {
     fn handle<C: XConnection>(self, target: Entity, state: &mut ServerState<C>);
+}
+
+impl Event for xx_zone_item_v1::Event {
+    fn handle<C: XConnection>(self, target: Entity, state: &mut ServerState<C>) {
+        match self {
+            xx_zone_item_v1::Event::FrameExtents {
+                top,
+                bottom,
+                left,
+                right,
+            } => {
+                debug!(
+                    "zone frame extents for {target:?}: top={top}, bottom={bottom}, left={left}, right={right}"
+                );
+            }
+            xx_zone_item_v1::Event::Position { x, y } => {
+                let data = state.world.entity(target).unwrap();
+                let scale = data.get::<&SurfaceScaleFactor>().unwrap().0;
+                let mut window = data.get::<&mut WindowData>().unwrap();
+                let x = (x as f64 * scale) as i32 + window.output_offset.x;
+                let y = (y as f64 * scale) as i32 + window.output_offset.y;
+                window.attrs.dims.x = x as i16;
+                window.attrs.dims.y = y as i16;
+                let pending = PendingSurfaceState {
+                    x,
+                    y,
+                    width: window.attrs.dims.width.into(),
+                    height: window.attrs.dims.height.into(),
+                };
+                drop(window);
+                state.world.insert_one(target, pending).unwrap();
+            }
+            xx_zone_item_v1::Event::PositionFailed => {
+                debug!("compositor rejected a zones position request for {target:?}");
+            }
+            xx_zone_item_v1::Event::Closed => {
+                let Ok(mut role) = state.world.get::<&mut SurfaceRole>(target) else {
+                    return;
+                };
+                if let SurfaceRole::Toplevel(Some(toplevel)) = &mut *role {
+                    if let Some(zone_item) = toplevel.zone_item.take() {
+                        zone_item.item.destroy();
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 macro_rules! enum_try_from {
@@ -350,7 +420,8 @@ enum ObjectEvent {
     TabletTool(zwp_tablet_tool_v2::Event),
     TabletPadGroup(zwp_tablet_pad_group_v2::Event),
     TabletPadRing(zwp_tablet_pad_ring_v2::Event),
-    TabletPadStrip(zwp_tablet_pad_strip_v2::Event)
+    TabletPadStrip(zwp_tablet_pad_strip_v2::Event),
+    ZoneItem(xx_zone_item_v1::Event)
 }
 }
 
@@ -410,6 +481,13 @@ struct GlobalOutputOffsetDimension {
 struct GlobalOutputOffset {
     x: GlobalOutputOffsetDimension,
     y: GlobalOutputOffsetDimension,
+}
+
+struct ZonesState {
+    manager: XxZoneManagerV1,
+    zone: XxZoneV1,
+    valid: bool,
+    ready: bool,
 }
 
 /// The state of the X11 connection before XState has been fully initialized.
@@ -478,6 +556,7 @@ pub struct InnerServerState<S: X11Selection> {
     viewporter: WpViewporter,
     fractional_scale: Option<WpFractionalScaleManagerV1>,
     decoration_manager: Option<ZxdgDecorationManagerV1>,
+    zones: Option<ZonesState>,
     selection_states: selection::SelectionStates<S>,
     last_kb_serial: Option<(client::wl_seat::WlSeat, u32)>,
     activation_state: Option<ActivationState>,
@@ -548,6 +627,22 @@ impl<S: X11Selection> ServerState<NoConnection<S>> {
             .bind::<ZxdgDecorationManagerV1, _, _>(&qh, 1..=1, ())
             .ok();
 
+        let zones = global_list
+            .bind::<XxZoneManagerV1, _, _>(&qh, 1..=1, ())
+            .map(|manager| {
+                let zone = manager.get_zone(None, &qh, ());
+                ZonesState {
+                    manager,
+                    zone,
+                    valid: false,
+                    ready: false,
+                }
+            })
+            .inspect_err(|e| {
+                debug!("Could not bind zones manager ({e:?}); explicit X11 window positioning will remain disabled")
+            })
+            .ok();
+
         let selection_states = selection::SelectionStates::new(&global_list, &qh);
 
         dh.create_global::<InnerServerState<S>, XwaylandShellV1, _>(1, ());
@@ -596,6 +691,7 @@ impl<S: X11Selection> ServerState<NoConnection<S>> {
             new_scale: None,
             current_scale: 1.0,
             decoration_manager,
+            zones,
             world,
         };
         Self {
@@ -637,6 +733,7 @@ impl<C: XConnection> ServerState<C> {
 
     pub fn handle_clientside_events(&mut self) {
         self.handle_globals();
+        self.handle_zone_events();
 
         for (target, event) in self.world.read_events() {
             if !self.world.contains(target) {
@@ -823,6 +920,118 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
             if global_struct.interface == <WlOutput>::interface().name {
                 self.remove_output(global);
             }
+        }
+    }
+
+    fn handle_zone_events(&mut self) {
+        for event in std::mem::take(&mut self.world.zone_events) {
+            match event {
+                xx_zone_v1::Event::Size { width, height } => {
+                    if let Some(zones) = self.zones.as_mut() {
+                        zones.valid = !(width < 0 && height < 0);
+                        if !zones.valid {
+                            warn!("The compositor denied creation of a window-positioning zone");
+                        }
+                    }
+                }
+                xx_zone_v1::Event::Done => {
+                    let Some(zones) = self.zones.as_mut() else {
+                        continue;
+                    };
+                    zones.ready = true;
+                    if !zones.valid {
+                        continue;
+                    }
+
+                    let entities = self
+                        .world
+                        .query::<&SurfaceRole>()
+                        .iter()
+                        .filter_map(|(entity, role)| match role {
+                            SurfaceRole::Toplevel(Some(toplevel))
+                                if toplevel.zone_item.is_none() =>
+                            {
+                                Some(entity)
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    for entity in entities {
+                        self.attach_zone_item(entity, true);
+                    }
+                }
+                xx_zone_v1::Event::ItemEntered { item } => {
+                    self.set_zone_item_associated(&item, true);
+                }
+                xx_zone_v1::Event::ItemBlocked { item } | xx_zone_v1::Event::ItemLeft { item } => {
+                    self.set_zone_item_associated(&item, false);
+                }
+                xx_zone_v1::Event::Handle { .. } => {}
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    fn set_zone_item_associated(&mut self, item: &XxZoneItemV1, associated: bool) {
+        let Some(entity) = item.data::<Entity>().copied() else {
+            return;
+        };
+        let Ok(mut role) = self.world.get::<&mut SurfaceRole>(entity) else {
+            return;
+        };
+        let SurfaceRole::Toplevel(Some(toplevel)) = &mut *role else {
+            return;
+        };
+        if let Some(zone_item) = toplevel.zone_item.as_mut() {
+            if zone_item.item == *item {
+                zone_item.associated = associated;
+            }
+        }
+    }
+
+    fn attach_zone_item(&mut self, entity: Entity, commit: bool) {
+        let Some(zones) = self
+            .zones
+            .as_ref()
+            .filter(|zones| zones.ready && zones.valid)
+        else {
+            return;
+        };
+        let manager = zones.manager.clone();
+        let zone = zones.zone.clone();
+
+        let Ok(mut query) = self.world.query_one::<(
+            &WindowData,
+            &SurfaceScaleFactor,
+            &mut SurfaceRole,
+            &client::wl_surface::WlSurface,
+        )>(entity) else {
+            return;
+        };
+        let Some((window, scale, role, surface)) = query.get() else {
+            return;
+        };
+        let SurfaceRole::Toplevel(Some(toplevel)) = role else {
+            return;
+        };
+        if toplevel.zone_item.is_some() {
+            return;
+        }
+
+        let item = manager.get_zone_item(&toplevel.toplevel, &self.qh, entity);
+        zone.add_item(&item);
+        let (x, y) = window.zone_position(
+            scale.0,
+            window.attrs.dims.x.into(),
+            window.attrs.dims.y.into(),
+        );
+        item.set_position(x, y);
+        toplevel.zone_item = Some(ZoneItemData {
+            item,
+            associated: false,
+        });
+        if commit {
+            surface.commit();
         }
     }
 
@@ -1040,7 +1249,17 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
         self.world.insert(id, (SurfaceSerial(serial),)).unwrap();
     }
 
-    pub fn can_change_position(&self, window: x::Window) -> bool {
+    /// Requests an X11 window position through the zones protocol. Returns whether the caller
+    /// should configure the X window's position directly instead.
+    pub fn request_window_position(
+        &mut self,
+        window: x::Window,
+        x: Option<i32>,
+        y: Option<i32>,
+    ) -> bool {
+        let Some(entity) = self.windows.get(&window).copied() else {
+            return true;
+        };
         let Some(win) = self
             .windows
             .get(&window)
@@ -1051,7 +1270,52 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
             return true;
         };
 
-        !win.mapped || win.attrs.role.is_popup()
+        if !win.mapped || win.attrs.role.is_popup() {
+            return true;
+        }
+        drop(win);
+
+        let Some(zone) = self
+            .zones
+            .as_ref()
+            .filter(|zones| zones.ready && zones.valid)
+            .map(|zones| zones.zone.clone())
+        else {
+            // Preserve the old behavior on compositors without zones: mapped toplevels cannot
+            // be positioned with xdg-shell alone.
+            return false;
+        };
+
+        let mut query = self
+            .world
+            .query_one::<(
+                &WindowData,
+                &SurfaceScaleFactor,
+                &mut SurfaceRole,
+                &client::wl_surface::WlSurface,
+            )>(entity)
+            .unwrap();
+        let Some((window, scale, role, surface)) = query.get() else {
+            return false;
+        };
+        let SurfaceRole::Toplevel(Some(toplevel)) = role else {
+            return false;
+        };
+        let Some(zone_item) = toplevel.zone_item.as_mut() else {
+            return false;
+        };
+
+        if !zone_item.associated {
+            zone.add_item(&zone_item.item);
+        }
+        let (x, y) = window.zone_position(
+            scale.0,
+            x.unwrap_or(window.attrs.dims.x.into()),
+            y.unwrap_or(window.attrs.dims.y.into()),
+        );
+        zone_item.item.set_position(x, y);
+        surface.commit();
+        false
     }
 
     pub fn reconfigure_window(&mut self, event: x::ConfigureNotifyEvent) {
@@ -1549,6 +1813,26 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
             }
         }
 
+        let zone_item = self
+            .zones
+            .as_ref()
+            .filter(|zones| zones.ready && zones.valid)
+            .map(|zones| {
+                let item = zones.manager.get_zone_item(&toplevel, &self.qh, entity);
+                zones.zone.add_item(&item);
+                let scale = self.world.get::<&SurfaceScaleFactor>(entity).unwrap().0;
+                let (x, y) = window.zone_position(
+                    scale,
+                    window.attrs.dims.x.into(),
+                    window.attrs.dims.y.into(),
+                );
+                item.set_position(x, y);
+                ZoneItemData {
+                    item,
+                    associated: false,
+                }
+            });
+
         drop(window);
         drop(group);
         drop(surface);
@@ -1568,6 +1852,7 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
                 wl: wl_decoration,
                 satellite: sat_decoration,
             },
+            zone_item,
         }
     }
 

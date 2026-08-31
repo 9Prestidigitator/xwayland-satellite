@@ -89,6 +89,11 @@ use wayland_server::{
     Client, Dispatch, Display, DisplayHandle, GlobalDispatch, Resource, WEnum,
 };
 use wl_drm::server::wl_drm::WlDrm;
+use zones::server::{
+    xx_zone_item_v1::{self, XxZoneItemV1},
+    xx_zone_manager_v1::{self, XxZoneManagerV1},
+    xx_zone_v1::{self, XxZoneV1},
+};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct BufferDamage {
@@ -249,6 +254,10 @@ struct ActivationTokenData {
     constructed: bool,
 }
 
+struct ZoneItemState {
+    toplevel: XdgToplevel,
+}
+
 pub struct LockedPointer {
     pub surface: SurfaceId,
     pub cursor_hint: Option<Vec2f>,
@@ -286,6 +295,7 @@ struct State {
     xdg_activation: Option<XdgActivationV1>,
     valid_tokens: HashSet<String>,
     token_counter: u32,
+    zone_positions: HashMap<XdgToplevel, Vec2>,
 }
 
 impl Default for State {
@@ -318,6 +328,7 @@ impl Default for State {
             xdg_activation: None,
             valid_tokens: HashSet::new(),
             token_counter: 0,
+            zone_positions: HashMap::new(),
         }
     }
 }
@@ -540,6 +551,15 @@ impl Server {
             client: None,
             decorations_global,
         }
+    }
+
+    pub fn enable_zones(&mut self) {
+        self.dh.create_global::<State, XxZoneManagerV1, _>(1, ());
+    }
+
+    pub fn zone_position(&self, surface_id: SurfaceId) -> Option<Vec2> {
+        let toplevel = &self.state.surfaces.get(&surface_id)?.toplevel().toplevel;
+        self.state.zone_positions.get(toplevel).copied()
     }
 
     pub fn poll_fd(&mut self) -> BorrowedFd<'_> {
@@ -1015,6 +1035,98 @@ simple_global_dispatch!(WlShm);
 simple_global_dispatch!(WlCompositor);
 simple_global_dispatch!(WlSubcompositor);
 simple_global_dispatch!(XdgWmBase);
+
+impl GlobalDispatch<XxZoneManagerV1, ()> for State {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &Client,
+        resource: wayland_server::New<XxZoneManagerV1>,
+        _: &(),
+        data_init: &mut wayland_server::DataInit<'_, Self>,
+    ) {
+        data_init.init(resource, ());
+    }
+}
+
+impl Dispatch<XxZoneManagerV1, ()> for State {
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &XxZoneManagerV1,
+        request: xx_zone_manager_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        data_init: &mut wayland_server::DataInit<'_, Self>,
+    ) {
+        match request {
+            xx_zone_manager_v1::Request::Destroy => {}
+            xx_zone_manager_v1::Request::GetZoneItem { id, toplevel } => {
+                data_init.init(id, ZoneItemState { toplevel });
+            }
+            xx_zone_manager_v1::Request::GetZone { id, .. }
+            | xx_zone_manager_v1::Request::GetZoneFromHandle { id, .. } => {
+                let zone = data_init.init(id, ());
+                zone.size(1000, 1000);
+                zone.handle("test-zone".to_string());
+                zone.done();
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Dispatch<XxZoneV1, ()> for State {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        zone: &XxZoneV1,
+        request: xx_zone_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut wayland_server::DataInit<'_, Self>,
+    ) {
+        match request {
+            xx_zone_v1::Request::Destroy => {}
+            xx_zone_v1::Request::AddItem { item } => {
+                zone.item_entered(&item);
+                item.frame_extents(0, 0, 0, 0);
+                let data = item.data::<ZoneItemState>().unwrap();
+                let position = state
+                    .zone_positions
+                    .get(&data.toplevel)
+                    .copied()
+                    .unwrap_or_default();
+                item.position(position.x, position.y);
+            }
+            xx_zone_v1::Request::RemoveItem { item } => zone.item_left(&item),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Dispatch<XxZoneItemV1, ZoneItemState> for State {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        item: &XxZoneItemV1,
+        request: xx_zone_item_v1::Request,
+        data: &ZoneItemState,
+        _: &DisplayHandle,
+        _: &mut wayland_server::DataInit<'_, Self>,
+    ) {
+        match request {
+            xx_zone_item_v1::Request::Destroy => {}
+            xx_zone_item_v1::Request::SetPosition { x, y } => {
+                state
+                    .zone_positions
+                    .insert(data.toplevel.clone(), Vec2 { x, y });
+                item.position(x, y);
+            }
+            _ => unreachable!(),
+        }
+    }
+}
 simple_global_dispatch!(ZxdgOutputManagerV1);
 simple_global_dispatch!(ZwpTabletManagerV2);
 simple_global_dispatch!(ZxdgDecorationManagerV1);

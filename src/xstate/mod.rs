@@ -479,7 +479,15 @@ impl XState {
                     let mut list = Vec::new();
                     let mask = e.value_mask();
 
-                    if server_state.can_change_position(e.window()) {
+                    let wants_position =
+                        mask.intersects(x::ConfigWindowMask::X | x::ConfigWindowMask::Y);
+                    let configure_x_position = !wants_position
+                        || server_state.request_window_position(
+                            e.window(),
+                            mask.contains(x::ConfigWindowMask::X).then(|| e.x().into()),
+                            mask.contains(x::ConfigWindowMask::Y).then(|| e.y().into()),
+                        );
+                    if configure_x_position {
                         if mask.contains(x::ConfigWindowMask::X) {
                             list.push(x::ConfigWindow::X(e.x().into()));
                         }

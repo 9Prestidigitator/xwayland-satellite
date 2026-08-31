@@ -67,6 +67,7 @@ Additionally, satellite can *optionally* take advantage of the following protoco
 - Pointer constraints
 - Tablet input
 - Fractional scale
+- Zones (`xx-zones-v1`) - used to honor X11 toplevel position requests
 
 ## Compositor integration
 Satellite supports passing through the `-listenfd` Xwayland argument. What this means is you can integrate satellite
