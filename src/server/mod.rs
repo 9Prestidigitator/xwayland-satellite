@@ -1412,12 +1412,7 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
         false
     }
 
-    /// Updates the Wayland representation after Xwayland configures an X window. Returns an X
-    /// geometry correction when Xwayland has reset the position of a zone-managed toplevel.
-    pub fn reconfigure_window(
-        &mut self,
-        event: x::ConfigureNotifyEvent,
-    ) -> Option<PendingSurfaceState> {
+    pub fn reconfigure_window(&mut self, event: x::ConfigureNotifyEvent) {
         let Some((mut win, data)) = self
             .windows
             .get(&event.window())
@@ -1426,7 +1421,7 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
             .and_then(|d| Some((d.get::<&mut WindowData>()?, d)))
         else {
             debug!("not reconfiguring unknown window {:?}", event.window());
-            return None;
+            return;
         };
 
         let dims = WindowDims {
@@ -1436,7 +1431,7 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
             height: event.height(),
         };
         if dims == win.attrs.dims {
-            return None;
+            return;
         } else if win.attrs.role.is_popup() {
             win.attrs.dims = dims;
         }
@@ -1445,15 +1440,17 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
 
         if !win.mapped {
             win.attrs.dims = dims;
-            return None;
+            return;
         }
 
         if self.xdg_wm_base.version() < 3 {
-            return None;
+            return;
         }
 
         let mut query = data.query::<(&mut SurfaceRole, &SurfaceScaleFactor)>();
-        let (role, scale_factor) = query.get()?;
+        let Some((role, scale_factor)) = query.get() else {
+            return;
+        };
 
         match role {
             SurfaceRole::Popup(Some(popup)) => {
@@ -1466,31 +1463,15 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
                     1.max((event.height() as f64 / scale_factor.0) as i32),
                 );
                 popup.popup.reposition(&popup.positioner, 0);
-                None
             }
-            SurfaceRole::Toplevel(Some(toplevel)) => {
-                let restore_zone_position = toplevel
-                    .zone_item
-                    .as_ref()
-                    .is_some_and(|item| item.associated || item.association_pending)
-                    && (dims.x != win.attrs.dims.x || dims.y != win.attrs.dims.y);
+            SurfaceRole::Toplevel(Some(_)) => {
                 win.attrs.dims.width = dims.width;
                 win.attrs.dims.height = dims.height;
-                let correction = restore_zone_position.then_some(PendingSurfaceState {
-                    x: win.attrs.dims.x.into(),
-                    y: win.attrs.dims.y.into(),
-                    width: dims.width.into(),
-                    height: dims.height.into(),
-                });
                 drop(query);
                 drop(win);
                 update_surface_viewport(&self.world, self.world.query_one(data.entity()).unwrap());
-                correction
             }
-            other => {
-                warn!("Non popup ({other:?}) being reconfigured, behavior may be off.");
-                None
-            }
+            other => warn!("Non popup ({other:?}) being reconfigured, behavior may be off."),
         }
     }
 

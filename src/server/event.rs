@@ -291,12 +291,27 @@ impl SurfaceEvents {
         drop(xdg);
 
         if let Some(pending) = pending {
+            let is_toplevel = matches!(
+                &*data.get::<&SurfaceRole>().unwrap(),
+                SurfaceRole::Toplevel(Some(_))
+            );
             let mut query = data.query::<(&SurfaceScaleFactor, &x::Window, &mut WindowData)>();
             let (scale_factor, window, window_data) = query.get().unwrap();
 
             let window = *window;
-            let x = (pending.x.max(0) as f64 * scale_factor.0) as i32 + window_data.output_offset.x;
-            let y = (pending.y.max(0) as f64 * scale_factor.0) as i32 + window_data.output_offset.y;
+            // xdg_toplevel.configure carries a size but no position. Keep the X coordinates
+            // authoritative so clients can read back the position accepted through zones.
+            let (x, y) = if is_toplevel {
+                (
+                    window_data.attrs.dims.x.into(),
+                    window_data.attrs.dims.y.into(),
+                )
+            } else {
+                (
+                    (pending.x.max(0) as f64 * scale_factor.0) as i32 + window_data.output_offset.x,
+                    (pending.y.max(0) as f64 * scale_factor.0) as i32 + window_data.output_offset.y,
+                )
+            };
             let width = if pending.width > 0 {
                 (pending.width as f64 * scale_factor.0) as u16
             } else {

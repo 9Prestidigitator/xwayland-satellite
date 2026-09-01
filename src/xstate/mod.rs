@@ -425,10 +425,7 @@ impl XState {
                     ));
                 }
                 xcb::Event::X(x::Event::ConfigureNotify(e)) => {
-                    let window = e.window();
-                    if let Some(dims) = server_state.reconfigure_window(e) {
-                        server_state.connection.set_window_dims(window, dims);
-                    }
+                    server_state.reconfigure_window(e);
                 }
                 xcb::Event::X(x::Event::UnmapNotify(e)) => {
                     trace!("unmap event: {:?}", e.event());

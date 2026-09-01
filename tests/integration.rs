@@ -236,6 +236,7 @@ impl Fixture {
         let unscaled_geo = connection.get_reply(&x::GetGeometry {
             drawable: x::Drawable::Window(window),
         });
+        let (u_x, u_y) = (unscaled_geo.x(), unscaled_geo.y());
         let (u_width, u_height) = (unscaled_geo.width(), unscaled_geo.height());
 
         let data = self.testwl.get_surface_data(surface).unwrap();
@@ -257,8 +258,8 @@ impl Fixture {
         let geometry = connection.get_reply(&x::GetGeometry {
             drawable: x::Drawable::Window(window),
         });
-        assert_eq!(geometry.x(), 0);
-        assert_eq!(geometry.y(), 0);
+        assert_eq!(geometry.x(), u_x);
+        assert_eq!(geometry.y(), u_y);
         assert_eq!(geometry.width(), (u_width as f32 * scale) as _);
         assert_eq!(geometry.height(), (u_height as f32 * scale) as _);
     }
@@ -2355,4 +2356,54 @@ fn client_init_resize() {
         "Got wrong resizing edge: {:?}",
         data.resizing
     );
+}
+
+#[test]
+fn zones_position_survives_repeated_x_window_remaps() {
+    let mut f = Fixture::new_preset(testwl::Server::enable_zones);
+    let mut connection = Connection::new(&f.display);
+
+    let parent = connection.new_window(connection.root, 0, 0, 400, 300, false);
+    f.map_as_toplevel(&mut connection, parent);
+
+    let child = connection.new_window(connection.root, 0, 0, 200, 150, false);
+    connection.set_property(
+        child,
+        x::ATOM_WINDOW,
+        connection.atoms.transient_for,
+        &[parent],
+    );
+    let mut surface = f.map_as_toplevel(&mut connection, child);
+
+    connection
+        .send_and_check_request(&x::ConfigureWindow {
+            window: child,
+            value_list: &[x::ConfigWindow::X(120), x::ConfigWindow::Y(230)],
+        })
+        .unwrap();
+    f.wait_and_dispatch();
+    assert_eq!(
+        f.testwl.zone_position(surface),
+        Some(testwl::Vec2 { x: 120, y: 230 })
+    );
+
+    for _ in 0..2 {
+        connection.unmap_window(child);
+        f.wait_and_dispatch();
+        connection.map_window(child);
+        f.wait_and_dispatch();
+        surface = f
+            .testwl
+            .last_created_surface_id()
+            .expect("No surface created on child remap");
+        f.configure_and_verify_new_toplevel(&mut connection, child, surface);
+        assert_eq!(
+            f.testwl.zone_position(surface),
+            Some(testwl::Vec2 { x: 120, y: 230 })
+        );
+        let geometry = connection.get_reply(&x::GetGeometry {
+            drawable: x::Drawable::Window(child),
+        });
+        assert_eq!((geometry.x(), geometry.y()), (120, 230));
+    }
 }

@@ -907,8 +907,7 @@ impl TestFixture<FakeXConnection> {
     }
 
     fn reconfigure_window(&mut self, window: Window, dims: WindowDims, override_redirect: bool) {
-        let correction = self
-            .satellite
+        self.satellite
             .reconfigure_window(x::ConfigureNotifyEvent::new(
                 window,
                 window,
@@ -920,11 +919,6 @@ impl TestFixture<FakeXConnection> {
                 0,
                 override_redirect,
             ));
-        if let Some(correction) = correction {
-            self.satellite
-                .connection
-                .set_window_dims(window, correction);
-        }
     }
 }
 
@@ -1260,57 +1254,6 @@ fn zones_positions_survive_x_map_before_surface_association() {
         surface.obj.destroy();
         f.run();
     }
-}
-
-#[test]
-fn zones_restore_x_geometry_after_initial_xwayland_reset() {
-    let mut f = TestFixture::new_pre_connect(testwl::Server::enable_zones);
-    let compositor = f.compositor();
-    let window = Window::new(1);
-    let (first_surface_obj, first_surface) = f.create_toplevel(&compositor, window);
-
-    let restored = testwl::Vec2 { x: 410, y: 75 };
-    assert!(
-        !f.satellite
-            .request_window_position(window, Some(restored.x), Some(restored.y))
-    );
-    f.run();
-    f.run();
-    assert_eq!(f.testwl.zone_position(first_surface), Some(restored));
-
-    // Xwayland may reset its internal X geometry to the root origin while the initial xdg-shell
-    // configure completes. The Wayland window remains visibly placed by the zone, but leaving the
-    // X geometry at (0, 0) makes SWELL save (0, 0) when the dialog closes and breaks the following
-    // restore.
-    f.reconfigure_window(
-        window,
-        WindowDims {
-            x: 0,
-            y: 0,
-            width: 100,
-            height: 100,
-        },
-        false,
-    );
-    assert_eq!(
-        f.connection().windows[&window].dims,
-        WindowDims {
-            x: restored.x as i16,
-            y: restored.y as i16,
-            width: 100,
-            height: 100,
-        }
-    );
-
-    f.satellite.unmap_window(window);
-    first_surface_obj.obj.destroy();
-    f.run();
-    let (buffer, surface) = compositor.create_surface();
-    f.map_window(&compositor, window, &surface.obj, &buffer);
-    f.run();
-    let reopened_surface = f.check_new_surface();
-    f.run();
-    assert_eq!(f.testwl.zone_position(reopened_surface), Some(restored));
 }
 
 #[test]
