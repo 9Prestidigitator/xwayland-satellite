@@ -560,7 +560,6 @@ impl CurrentSurface {
     }
 }
 pub struct LastClickSerial(pub client::wl_seat::WlSeat, pub u32);
-pub struct LeftButtonPressed;
 
 impl Event for client::wl_pointer::Event {
     fn handle<C: XConnection>(self, target: Entity, state: &mut ServerState<C>) {
@@ -778,10 +777,7 @@ impl Event for client::wl_pointer::Event {
                 {
                     match current_surface {
                         CurrentSurface::Xwayland(entity) => {
-                            cmd.insert(
-                                *entity,
-                                (LastClickSerial(seat.clone(), serial), LeftButtonPressed),
-                            );
+                            cmd.insert(*entity, (LastClickSerial(seat.clone(), serial),));
                         }
                         CurrentSurface::Decoration(parent) => {
                             let seat = seat.clone();
@@ -791,11 +787,6 @@ impl Event for client::wl_pointer::Event {
                             return;
                         }
                     }
-                } else if button_state == WEnum::Value(client::wl_pointer::ButtonState::Released)
-                    && button == button_codes::LEFT
-                    && let CurrentSurface::Xwayland(entity) = current_surface
-                {
-                    cmd.remove_one::<LeftButtonPressed>(*entity);
                 }
 
                 server.button(serial, time, button, convert_wenum(button_state));
