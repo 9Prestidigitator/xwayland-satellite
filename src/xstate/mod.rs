@@ -844,6 +844,10 @@ impl XState {
             return;
         }
         if event.state() == x::Property::Delete {
+            if event.atom() == self.atoms.wm_protocols {
+                server_state.set_take_focus(event.window(), false);
+                return;
+            }
             debug!(
                 "ignoring delete for property {:?}",
                 get_atom_name(&self.connection, event.atom())
@@ -880,6 +884,11 @@ impl XState {
                 if let Some(decorations) = motif_hints.decorations {
                     server_state.set_win_decorations(window, decorations);
                 }
+            }
+            x if x == self.atoms.wm_protocols => {
+                let protocols =
+                    unwrap_or_skip_bad_window_ret!(self.get_protocols(window)).unwrap_or_default();
+                server_state.set_take_focus(window, protocols.contains(&self.atoms.wm_take_focus));
             }
             _ => {
                 if log::log_enabled!(log::Level::Debug) {

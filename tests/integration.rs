@@ -355,6 +355,7 @@ impl Fixture {
 xcb::atoms_struct! {
     struct Atoms {
         wm_protocols => b"WM_PROTOCOLS",
+        wm_take_focus => b"WM_TAKE_FOCUS",
         net_active_window => b"_NET_ACTIVE_WINDOW",
         wm_delete_window => b"WM_DELETE_WINDOW",
         net_wm_state => b"_NET_WM_STATE",
@@ -1821,6 +1822,48 @@ fn popup_done() {
         .expect("Couldn't get window attributes");
 
     assert_eq!(reply.map_state(), x::MapState::Unmapped);
+}
+
+#[test]
+fn popup_late_wm_take_focus_does_not_steal_focus() {
+    let mut f = Fixture::new();
+    let mut conn = Connection::new(&f.display);
+    let toplevel = conn.new_window(conn.root, 0, 0, 200, 200, false);
+    f.map_as_toplevel(&mut conn, toplevel);
+
+    let popup = conn.new_window(conn.root, 10, 20, 100, 50, true);
+    conn.set_property(
+        popup,
+        x::ATOM_WM_HINTS,
+        x::ATOM_WM_HINTS,
+        &[1_u32, 1, 0, 0, 0, 0, 0, 0, 0],
+    );
+    conn.map_window(popup);
+    f.wait_and_dispatch();
+    let surface = f
+        .testwl
+        .last_created_surface_id()
+        .expect("No popup surface created");
+    assert!(matches!(
+        f.testwl.get_surface_data(surface).unwrap().role,
+        Some(testwl::SurfaceRole::Popup(_))
+    ));
+
+    // Steam may advertise WM_TAKE_FOCUS after MapNotify but before the host's first popup
+    // configure. This changes the popup from the passive input model and must be observed.
+    conn.set_property(
+        popup,
+        x::ATOM_ATOM,
+        conn.atoms.wm_protocols,
+        &[conn.atoms.wm_take_focus],
+    );
+    // The property update has no Wayland response for the fixture to await. Give the satellite
+    // event loop time to consume it before issuing the first popup configure.
+    std::thread::sleep(Duration::from_millis(50));
+    f.testwl.configure_popup(surface);
+    f.wait_and_dispatch();
+
+    assert_eq!(conn.get_reply(&x::GetInputFocus {}).focus(), toplevel);
 }
 
 #[test]
