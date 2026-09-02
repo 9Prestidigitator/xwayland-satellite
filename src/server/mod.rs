@@ -1104,12 +1104,39 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
     }
 
     fn zone_target_for_position(&self, entity: Entity, x: i32, y: i32) -> ZoneTarget {
-        let current_output = self
+        let preferred_output = self
             .world
             .get::<&OnOutput>(entity)
             .ok()
-            .map(|output| output.0);
-        let mut closest: Option<(i64, bool, Entity)> = None;
+            .map(|output| output.0)
+            .or_else(|| {
+                let parent = self
+                    .world
+                    .get::<&WindowData>(entity)
+                    .ok()?
+                    .attrs
+                    .transient_for?;
+                let parent = *self.windows.get(&parent)?;
+                self.world
+                    .get::<&OnOutput>(parent)
+                    .ok()
+                    .map(|output| output.0)
+                    .or_else(|| {
+                        let role = self.world.get::<&SurfaceRole>(parent).ok()?;
+                        match &*role {
+                            SurfaceRole::Toplevel(Some(toplevel)) => toplevel
+                                .zone_item
+                                .as_ref()
+                                .and_then(|item| match item.target {
+                                    ZoneTarget::Output(output) => Some(output),
+                                    ZoneTarget::Fallback => None,
+                                }),
+                            _ => None,
+                        }
+                    })
+            });
+        let mut containing: Option<(i128, Entity)> = None;
+        let mut closest: Option<(i128, bool, Entity)> = None;
 
         for (output, (dimensions, scale, zone)) in self
             .world
@@ -1138,7 +1165,21 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
                 && y >= offset_y
                 && y < offset_y.saturating_add(height)
             {
-                return ZoneTarget::Output(output);
+                if preferred_output == Some(output) {
+                    return ZoneTarget::Output(output);
+                }
+
+                // Mixed-scale RandR outputs can overlap: Xwayland keeps Wayland's logical
+                // output origins but represents positions within a surface in scaled X pixels.
+                // With no existing surface/parent output to disambiguate, prefer the candidate
+                // where the requested point is closest to that output's local origin.
+                let local_x = ((x - offset_x) as f64 / scale) as i128;
+                let local_y = ((y - offset_y) as f64 / scale) as i128;
+                let local_distance = local_x.pow(2) + local_y.pow(2);
+                if containing.is_none_or(|(best_distance, _)| local_distance < best_distance) {
+                    containing = Some((local_distance, output));
+                }
+                continue;
             }
 
             let dx = if x < offset_x {
@@ -1151,8 +1192,8 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
             } else {
                 y.saturating_sub(offset_y.saturating_add(height))
             };
-            let distance = i64::from(dx).pow(2) + i64::from(dy).pow(2);
-            let prefer_current = current_output == Some(output);
+            let distance = i128::from(dx).pow(2) + i128::from(dy).pow(2);
+            let prefer_current = preferred_output == Some(output);
             if closest.is_none_or(|(best_distance, best_current, _)| {
                 distance < best_distance
                     || (distance == best_distance && prefer_current && !best_current)
@@ -1161,6 +1202,9 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
             }
         }
 
+        if let Some((_, output)) = containing {
+            return ZoneTarget::Output(output);
+        }
         closest
             .map(|(_, _, output)| ZoneTarget::Output(output))
             .unwrap_or(ZoneTarget::Fallback)

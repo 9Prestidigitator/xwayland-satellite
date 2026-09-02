@@ -1143,13 +1143,13 @@ fn zones_mapped_toplevel_can_move_between_output_zones() {
 }
 
 #[test]
-fn zones_initial_position_uses_secondary_output_scale_and_origin() {
+fn zones_initial_position_disambiguates_overlapping_mixed_scale_outputs() {
     let mut f = TestFixture::new_pre_connect(testwl::Server::enable_zones);
     let compositor = f.compositor();
-    f.new_output(0, 0);
+    let (_, primary) = f.new_output(0, 0);
     let (_, secondary) = f.new_output(1000, 0);
-    secondary.scale(2);
-    secondary.done();
+    primary.scale(2);
+    primary.done();
     f.run();
     f.run();
 
@@ -1184,7 +1184,7 @@ fn zones_initial_position_uses_secondary_output_scale_and_origin() {
     assert!(f.testwl.zone_output_is(surface_id, &secondary));
     assert_eq!(
         f.testwl.zone_position(surface_id),
-        Some(testwl::Vec2 { x: 100, y: 100 })
+        Some(testwl::Vec2 { x: 200, y: 200 })
     );
     assert_eq!(
         (
@@ -1192,6 +1192,75 @@ fn zones_initial_position_uses_secondary_output_scale_and_origin() {
             f.connection().windows[&window].dims.y
         ),
         (1200, 200)
+    );
+}
+
+#[test]
+fn zones_mixed_fractional_scale_overlap_prefers_transient_parent_output() {
+    let mut f = TestFixture::new_pre_connect(|server| {
+        server.enable_zones();
+        server.enable_fractional_scale();
+    });
+    let compositor = f.compositor();
+    let (_, primary) = f.new_output(0, 0);
+    f.new_output(1000, 0);
+    f.run();
+
+    let parent = Window::new(1);
+    let (_, parent_surface) = f.create_toplevel(&compositor, parent);
+    let fractional = f
+        .testwl
+        .get_surface_data(parent_surface)
+        .unwrap()
+        .fractional
+        .as_ref()
+        .unwrap()
+        .clone();
+    fractional.preferred_scale(180); // 1.5x
+    f.testwl.move_surface_to_output(parent_surface, &primary);
+    f.run();
+    f.run();
+
+    let child = Window::new(2);
+    f.new_window(
+        child,
+        false,
+        WindowData {
+            mapped: false,
+            fullscreen: false,
+            dims: WindowDims {
+                x: 1200,
+                y: 300,
+                width: 100,
+                height: 100,
+            },
+        },
+    );
+    f.satellite.set_transient_for(child, parent);
+    f.satellite.set_size_hints(
+        child,
+        WmNormalHints {
+            has_position: true,
+            ..Default::default()
+        },
+    );
+    let (buffer, surface) = compositor.create_surface();
+    f.map_window(&compositor, child, &surface.obj, &buffer);
+    f.run();
+    let child_surface = f.check_new_surface();
+    f.run();
+
+    assert!(f.testwl.zone_output_is(child_surface, &primary));
+    assert_eq!(
+        f.testwl.zone_position(child_surface),
+        Some(testwl::Vec2 { x: 800, y: 200 })
+    );
+    assert_eq!(
+        (
+            f.connection().windows[&child].dims.x,
+            f.connection().windows[&child].dims.y
+        ),
+        (1200, 300)
     );
 }
 

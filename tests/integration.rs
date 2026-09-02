@@ -1995,6 +1995,62 @@ fn output_offset_xdg_matches_crtcs() {
 }
 
 #[test]
+fn mixed_scale_crtcs_overlap_in_x_coordinates() {
+    let mut f = Fixture::new();
+    let connection = Connection::new(&f.display);
+    let primary = f.create_output(0, 0);
+    let secondary = f.create_output(1000, 0);
+    primary.mode(wl_output::Mode::Current, 1000, 1000, 60);
+    primary.scale(1);
+    primary.done();
+    secondary.geometry(
+        1000,
+        0,
+        0,
+        0,
+        wl_output::Subpixel::None,
+        "xwls".into(),
+        "secondary".into(),
+        wl_output::Transform::Normal,
+    );
+    secondary.mode(wl_output::Mode::Current, 2000, 2000, 60);
+    secondary.scale(2);
+    secondary.done();
+    f.testwl.dispatch();
+    std::thread::sleep(Duration::from_millis(100));
+
+    let resources = connection.get_reply(&xcb::randr::GetScreenResources {
+        window: connection.root,
+    });
+    let mut crtcs = Vec::new();
+    for output in resources.outputs().iter().copied() {
+        let output = connection.get_reply(&xcb::randr::GetOutputInfo {
+            output,
+            config_timestamp: resources.config_timestamp(),
+        });
+        let crtc = connection.get_reply(&xcb::randr::GetCrtcInfo {
+            crtc: output.crtc(),
+            config_timestamp: resources.config_timestamp(),
+        });
+        crtcs.push((
+            String::from_utf8_lossy(output.name()).into_owned(),
+            crtc.x(),
+            crtc.y(),
+            crtc.width(),
+            crtc.height(),
+        ));
+    }
+    crtcs.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        crtcs,
+        vec![
+            ("WL-1".to_string(), 0, 0, 1000, 1000),
+            ("WL-2".to_string(), 1000, 0, 2000, 2000),
+        ]
+    );
+}
+
+#[test]
 fn xdg_decorations() {
     let mut f = Fixture::new();
     let mut connection = Connection::new(&f.display);
