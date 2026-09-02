@@ -1069,6 +1069,133 @@ fn zones_position_request() {
 }
 
 #[test]
+fn zones_position_request_uses_the_requested_output() {
+    let mut f = TestFixture::new_pre_connect(testwl::Server::enable_zones);
+    let compositor = f.compositor();
+    let (_, primary) = f.new_output(0, 0);
+    let (_, secondary) = f.new_output(1000, 0);
+    f.run();
+
+    let window = Window::new(1);
+    let (_, surface_id) = f.create_toplevel(&compositor, window);
+
+    assert!(
+        !f.satellite
+            .request_window_position(window, Some(1120), Some(230))
+    );
+    f.run();
+    f.run();
+
+    assert!(!f.testwl.zone_output_is(surface_id, &primary));
+    assert!(f.testwl.zone_output_is(surface_id, &secondary));
+    assert_eq!(
+        f.testwl.zone_position(surface_id),
+        Some(testwl::Vec2 { x: 120, y: 230 })
+    );
+    assert_eq!(
+        f.connection().windows[&window].dims,
+        WindowDims {
+            x: 1120,
+            y: 230,
+            width: 100,
+            height: 100,
+        }
+    );
+}
+
+#[test]
+fn zones_mapped_toplevel_can_move_between_output_zones() {
+    let mut f = TestFixture::new_pre_connect(testwl::Server::enable_zones);
+    let compositor = f.compositor();
+    let (_, primary) = f.new_output(0, 0);
+    let (_, secondary) = f.new_output(1000, 0);
+    f.run();
+
+    let window = Window::new(1);
+    let (_, surface_id) = f.create_toplevel(&compositor, window);
+
+    assert!(
+        !f.satellite
+            .request_window_position(window, Some(120), Some(230))
+    );
+    f.run();
+    assert!(f.testwl.zone_output_is(surface_id, &primary));
+
+    assert!(
+        !f.satellite
+            .request_window_position(window, Some(1120), Some(230))
+    );
+    f.run();
+    f.run();
+
+    assert!(f.testwl.zone_output_is(surface_id, &secondary));
+    assert_eq!(
+        f.testwl.zone_position(surface_id),
+        Some(testwl::Vec2 { x: 120, y: 230 })
+    );
+    assert_eq!(
+        (
+            f.connection().windows[&window].dims.x,
+            f.connection().windows[&window].dims.y
+        ),
+        (1120, 230)
+    );
+}
+
+#[test]
+fn zones_initial_position_uses_secondary_output_scale_and_origin() {
+    let mut f = TestFixture::new_pre_connect(testwl::Server::enable_zones);
+    let compositor = f.compositor();
+    f.new_output(0, 0);
+    let (_, secondary) = f.new_output(1000, 0);
+    secondary.scale(2);
+    secondary.done();
+    f.run();
+    f.run();
+
+    let window = Window::new(1);
+    let (buffer, surface) = compositor.create_surface();
+    f.new_window(
+        window,
+        false,
+        WindowData {
+            mapped: false,
+            fullscreen: false,
+            dims: WindowDims {
+                x: 1200,
+                y: 200,
+                width: 100,
+                height: 100,
+            },
+        },
+    );
+    f.satellite.set_size_hints(
+        window,
+        WmNormalHints {
+            has_position: true,
+            ..Default::default()
+        },
+    );
+    f.map_window(&compositor, window, &surface.obj, &buffer);
+    f.run();
+    let surface_id = f.check_new_surface();
+    f.run();
+
+    assert!(f.testwl.zone_output_is(surface_id, &secondary));
+    assert_eq!(
+        f.testwl.zone_position(surface_id),
+        Some(testwl::Vec2 { x: 100, y: 100 })
+    );
+    assert_eq!(
+        (
+            f.connection().windows[&window].dims.x,
+            f.connection().windows[&window].dims.y
+        ),
+        (1200, 200)
+    );
+}
+
+#[test]
 fn zones_rejected_position_sends_configure_notify() {
     let mut f = TestFixture::new_pre_connect(|server| {
         server.enable_zones();

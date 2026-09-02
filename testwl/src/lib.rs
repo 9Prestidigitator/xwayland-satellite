@@ -258,6 +258,10 @@ struct ZoneItemState {
     toplevel: XdgToplevel,
 }
 
+struct ZoneState {
+    output: Option<WlOutput>,
+}
+
 pub struct LockedPointer {
     pub surface: SurfaceId,
     pub cursor_hint: Option<Vec2f>,
@@ -299,6 +303,7 @@ struct State {
     reject_zone_positions: bool,
     zone_items: HashSet<XdgToplevel>,
     zone_positions: HashMap<XdgToplevel, Vec2>,
+    zone_outputs: HashMap<XdgToplevel, Option<WlOutput>>,
 }
 
 impl Default for State {
@@ -335,6 +340,7 @@ impl Default for State {
             reject_zone_positions: false,
             zone_items: HashSet::new(),
             zone_positions: HashMap::new(),
+            zone_outputs: HashMap::new(),
         }
     }
 }
@@ -579,6 +585,14 @@ impl Server {
     pub fn zone_associated(&self, surface_id: SurfaceId) -> bool {
         let toplevel = &self.state.surfaces[&surface_id].toplevel().toplevel;
         self.state.zone_items.contains(toplevel)
+    }
+
+    pub fn zone_output_is(&self, surface_id: SurfaceId, output: &WlOutput) -> bool {
+        let toplevel = &self.state.surfaces[&surface_id].toplevel().toplevel;
+        self.state
+            .zone_outputs
+            .get(toplevel)
+            .is_some_and(|zone_output| zone_output.as_ref() == Some(output))
     }
 
     pub fn poll_fd(&mut self) -> BorrowedFd<'_> {
@@ -1083,9 +1097,14 @@ impl Dispatch<XxZoneManagerV1, ()> for State {
             xx_zone_manager_v1::Request::GetZoneItem { id, toplevel } => {
                 data_init.init(id, ZoneItemState { toplevel });
             }
-            xx_zone_manager_v1::Request::GetZone { id, .. }
-            | xx_zone_manager_v1::Request::GetZoneFromHandle { id, .. } => {
-                let zone = data_init.init(id, ());
+            xx_zone_manager_v1::Request::GetZone { id, output } => {
+                let zone = data_init.init(id, ZoneState { output });
+                zone.size(1000, 1000);
+                zone.handle("test-zone".to_string());
+                zone.done();
+            }
+            xx_zone_manager_v1::Request::GetZoneFromHandle { id, .. } => {
+                let zone = data_init.init(id, ZoneState { output: None });
                 zone.size(1000, 1000);
                 zone.handle("test-zone".to_string());
                 zone.done();
@@ -1095,13 +1114,13 @@ impl Dispatch<XxZoneManagerV1, ()> for State {
     }
 }
 
-impl Dispatch<XxZoneV1, ()> for State {
+impl Dispatch<XxZoneV1, ZoneState> for State {
     fn request(
         state: &mut Self,
         _: &Client,
         zone: &XxZoneV1,
         request: xx_zone_v1::Request,
-        _: &(),
+        zone_data: &ZoneState,
         _: &DisplayHandle,
         _: &mut wayland_server::DataInit<'_, Self>,
     ) {
@@ -1116,6 +1135,9 @@ impl Dispatch<XxZoneV1, ()> for State {
                 item.frame_extents(0, 0, 0, 0);
                 let data = item.data::<ZoneItemState>().unwrap();
                 state.zone_items.insert(data.toplevel.clone());
+                state
+                    .zone_outputs
+                    .insert(data.toplevel.clone(), zone_data.output.clone());
                 let position = state
                     .zone_positions
                     .get(&data.toplevel)
@@ -1126,6 +1148,7 @@ impl Dispatch<XxZoneV1, ()> for State {
             xx_zone_v1::Request::RemoveItem { item } => {
                 if let Some(data) = item.data::<ZoneItemState>() {
                     state.zone_items.remove(&data.toplevel);
+                    state.zone_outputs.remove(&data.toplevel);
                 }
                 zone.item_left(&item);
             }
@@ -1148,6 +1171,7 @@ impl Dispatch<XxZoneItemV1, ZoneItemState> for State {
             xx_zone_item_v1::Request::Destroy => {
                 state.zone_items.remove(&data.toplevel);
                 state.zone_positions.remove(&data.toplevel);
+                state.zone_outputs.remove(&data.toplevel);
             }
             xx_zone_item_v1::Request::SetPosition { x, y } => {
                 if state.reject_zone_positions {

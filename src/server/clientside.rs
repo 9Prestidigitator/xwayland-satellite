@@ -1,6 +1,6 @@
 use super::decoration::DecorationMarker;
 
-use super::{GlobalName, ObjectEvent};
+use super::{GlobalName, ObjectEvent, ZoneTarget};
 use hecs::{Entity, World};
 use smithay_client_toolkit::{
     activation::{ActivationHandler, RequestData, RequestDataExt},
@@ -124,7 +124,7 @@ pub(super) struct MyWorld {
     pub clipboard: SelectionEvents<SelectionOffer>,
     pub primary: SelectionEvents<PrimarySelectionOffer>,
     pub pending_activations: Vec<(xcb::x::Window, String)>,
-    pub zone_events: Vec<zones::client::xx_zone_v1::Event>,
+    pub zone_events: Vec<(ZoneTarget, zones::client::xx_zone_v1::Event)>,
 }
 
 impl MyWorld {
@@ -203,16 +203,16 @@ delegate_noop!(MyWorld: WpLinuxDrmSyncobjSurfaceV1);
 delegate_noop!(MyWorld: WpLinuxDrmSyncobjTimelineV1);
 delegate_noop!(MyWorld: XxZoneManagerV1);
 
-impl Dispatch<XxZoneV1, ()> for MyWorld {
+impl Dispatch<XxZoneV1, ZoneTarget> for MyWorld {
     fn event(
         state: &mut Self,
         _: &XxZoneV1,
         event: <XxZoneV1 as Proxy>::Event,
-        _: &(),
+        target: &ZoneTarget,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        state.zone_events.push(event);
+        state.zone_events.push((*target, event));
     }
 }
 

@@ -1472,6 +1472,18 @@ impl<S: X11Selection> GlobalDispatch<WlOutput, Global> for InnerServerState<S> {
                 &state.qh,
                 entity,
             );
+        let output_zone = state.zones.as_ref().map(|zones| {
+            let zone = zones
+                .manager
+                .get_zone(Some(&client), &state.qh, ZoneTarget::Output(entity));
+            OutputZone(ZoneState {
+                zone,
+                valid: false,
+                ready: false,
+                width: 0,
+                height: 0,
+            })
+        });
         state.world.spawn_at(
             entity,
             (
@@ -1482,6 +1494,9 @@ impl<S: X11Selection> GlobalDispatch<WlOutput, Global> for InnerServerState<S> {
                 GlobalName(data.name),
             ),
         );
+        if let Some(output_zone) = output_zone {
+            state.world.insert_one(entity, output_zone).unwrap();
+        }
         state.updated_outputs.push(entity);
     }
 }
