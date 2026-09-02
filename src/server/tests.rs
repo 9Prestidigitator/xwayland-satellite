@@ -1092,6 +1092,51 @@ fn zones_rejected_position_sends_configure_notify() {
 }
 
 #[test]
+fn zones_blocked_toplevel_keeps_surface_local_x_geometry() {
+    let mut f = TestFixture::new_pre_connect(|server| {
+        server.enable_zones();
+        server.block_zone_items();
+    });
+    let compositor = f.compositor();
+    let window = Window::new(1);
+    let (buffer, surface) = compositor.create_surface();
+    f.new_window(
+        window,
+        false,
+        WindowData {
+            mapped: false,
+            fullscreen: false,
+            dims: WindowDims {
+                x: 120,
+                y: 230,
+                width: 50,
+                height: 50,
+            },
+        },
+    );
+    f.satellite.set_size_hints(
+        window,
+        WmNormalHints {
+            has_position: true,
+            ..Default::default()
+        },
+    );
+    f.map_window(&compositor, window, &surface.obj, &buffer);
+    f.run();
+    let surface_id = f.check_new_surface();
+    f.run();
+
+    assert!(!f.testwl.zone_associated(surface_id));
+    f.testwl
+        .configure_toplevel(surface_id, 100, 100, vec![xdg_toplevel::State::Activated]);
+    f.run();
+
+    let dims = f.connection().windows[&window].dims;
+    assert_eq!((dims.x, dims.y), (0, 0));
+    assert_eq!((dims.width, dims.height), (100, 100));
+}
+
+#[test]
 fn zones_new_window_without_position_intent_is_not_positioned() {
     let mut f = TestFixture::new_pre_connect(testwl::Server::enable_zones);
     let compositor = f.compositor();

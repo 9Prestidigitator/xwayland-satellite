@@ -291,17 +291,23 @@ impl SurfaceEvents {
         drop(xdg);
 
         if let Some(pending) = pending {
-            let is_toplevel = matches!(
+            let has_accepted_zone = matches!(
                 &*data.get::<&SurfaceRole>().unwrap(),
-                SurfaceRole::Toplevel(Some(_))
+                SurfaceRole::Toplevel(Some(toplevel))
+                    if toplevel
+                        .zone_item
+                        .as_ref()
+                        .is_some_and(|zone_item| zone_item.associated)
             );
             let mut query = data.query::<(&SurfaceScaleFactor, &x::Window, &mut WindowData)>();
             let (scale_factor, window, window_data) = query.get().unwrap();
 
             let window = *window;
             // xdg_toplevel.configure carries a size but no position. Keep the X coordinates
-            // authoritative so clients can read back the position accepted through zones.
-            let (x, y) = if is_toplevel {
+            // authoritative only when the compositor accepted the toplevel into a zone. A
+            // blocked or ordinary toplevel still needs Xwayland's surface-local origin; keeping
+            // its rejected global position would offset pointer input and child popups.
+            let (x, y) = if has_accepted_zone {
                 (
                     window_data.attrs.dims.x.into(),
                     window_data.attrs.dims.y.into(),

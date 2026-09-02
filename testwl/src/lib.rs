@@ -295,6 +295,7 @@ struct State {
     xdg_activation: Option<XdgActivationV1>,
     valid_tokens: HashSet<String>,
     token_counter: u32,
+    block_zone_items: bool,
     reject_zone_positions: bool,
     zone_items: HashSet<XdgToplevel>,
     zone_positions: HashMap<XdgToplevel, Vec2>,
@@ -330,6 +331,7 @@ impl Default for State {
             xdg_activation: None,
             valid_tokens: HashSet::new(),
             token_counter: 0,
+            block_zone_items: false,
             reject_zone_positions: false,
             zone_items: HashSet::new(),
             zone_positions: HashMap::new(),
@@ -563,6 +565,10 @@ impl Server {
 
     pub fn reject_zone_positions(&mut self) {
         self.state.reject_zone_positions = true;
+    }
+
+    pub fn block_zone_items(&mut self) {
+        self.state.block_zone_items = true;
     }
 
     pub fn zone_position(&self, surface_id: SurfaceId) -> Option<Vec2> {
@@ -1102,6 +1108,10 @@ impl Dispatch<XxZoneV1, ()> for State {
         match request {
             xx_zone_v1::Request::Destroy => {}
             xx_zone_v1::Request::AddItem { item } => {
+                if state.block_zone_items {
+                    zone.item_blocked(&item);
+                    return;
+                }
                 zone.item_entered(&item);
                 item.frame_extents(0, 0, 0, 0);
                 let data = item.data::<ZoneItemState>().unwrap();
